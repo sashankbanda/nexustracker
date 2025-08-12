@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, updateDoc, collection, addDoc } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, updateDoc, collection, addDoc, getDocs, query, where } from 'firebase/firestore';
 
 // Import the separated components
 import ConfirmationModal from './components/ConfirmationModal';
@@ -16,6 +16,12 @@ import ProgressTracker from './components/ProgressTracker';
 import HomeworkTimelinePage from "./components/HomeworkTimelinePage";
 import ProgressHistoryPage from "./components/ProgressHistoryPage";
 
+// The firebaseConfig and appId variables are automatically provided by the Canvas environment.
+// We use a fallback value for local development.
+// const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+// const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+// const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
 const firebaseConfig = {
   apiKey: "AIzaSyC50s0u-pBORD98Np9pYsYiZoJHFsR24xU",
   authDomain: "multiplayerarcade-ff11f.firebaseapp.com",
@@ -27,6 +33,7 @@ const firebaseConfig = {
 };
 const appId = "multiplayerarcade-ff11f";
 
+// Initial data for new users
 const initialTimetable = {
   Monday: [
     { id: '1', start: '06:00', end: '07:00', title: 'Gym', category: 'Health', resources: [], isCompleted: false },
@@ -160,55 +167,72 @@ const calculateDuration = (start, end) => {
 };
 
 const App = () => {
+  // States to manage application data
   const [timetable, setTimetable] = useState(initialTimetable);
   const [homeworkTasks, setHomeworkTasks] = useState(initialHomework);
   const [resources, setResources] = useState([]);
+  const [dailyProgressHistory, setDailyProgressHistory] = useState([]);
   const [currentView, setCurrentView] = useState('daily');
   const [currentDay, setCurrentDay] = useState(getTodayDayName());
 
+  // States for UI modals and messages
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isTaskDetailsModalOpen, setIsTaskDetailsModalOpen] = useState(false);
   const [isResourcesModalOpen, setIsResourcesModalOpen] = useState(false);
   const [isConfirmationModalOpen, setIsConfirmationModalOpen] = useState(false);
   const [isRewardModalOpen, setIsRewardModalOpen] = useState(false);
 
+  // States for selected/editing items
   const [selectedTask, setSelectedTask] = useState(null);
   const [editTask, setEditTask] = useState(null);
   const [taskToDelete, setTaskToDelete] = useState(null);
 
+  // States for notifications and UI settings
   const [editModalErrorMessage, setEditModalErrorMessage] = useState('');
   const [infoMessage, setInfoMessage] = useState({ text: '', type: '' });
   const [notification, setNotification] = useState(null);
   const [notifiedTasks, setNotifiedTasks] = useState(new Set());
   const [darkMode, setDarkMode] = useState(true);
 
+  // States for Firebase/user
   const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
   const [userId, setUserId] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // States for progress tracking
   const [completedCount, setCompletedCount] = useState(0);
   const [remainingCount, setRemainingCount] = useState(0);
-  const [dailyProgressHistory, setDailyProgressHistory] = useState([]);
   const [lastResetDate, setLastResetDate] = useState(null);
 
+  // 1. Firebase Initialization & Authentication
   useEffect(() => {
     try {
       const app = initializeApp(firebaseConfig);
       const firestore = getFirestore(app);
-      const auth = getAuth(app);
+      const appAuth = getAuth(app);
       setDb(firestore);
+      setAuth(appAuth);
 
-      const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      const unsubscribe = onAuthStateChanged(appAuth, async (user) => {
         if (user) {
           setUserId(user.uid);
         } else {
           try {
-            await signInAnonymously(auth);
+            // Use custom token if available, otherwise sign in anonymously
+            if (initialAuthToken) {
+              await signInWithCustomToken(appAuth, initialAuthToken);
+            } else {
+              await signInAnonymously(appAuth);
+            }
           } catch (e) {
-            console.error("Error signing in anonymously:", e);
+            console.error("Error signing in:", e);
           }
         }
+        setIsAuthReady(true);
       });
+
       return () => unsubscribe();
     } catch (e) {
       console.error("Firebase initialization failed:", e);
@@ -217,57 +241,16 @@ const App = () => {
     }
   }, []);
 
-  const calculateProgress = (tasks) => {
-    const completed = tasks.filter(task => task.isCompleted).length;
-    const remaining = tasks.length - completed;
-    setCompletedCount(completed);
-    setRemainingCount(remaining);
-  };
-
-  const resetDailyCompletionStatus = async () => {
-    const today = new Date().toDateString();
-
-    if (lastResetDate === today) {
-      return;
-    }
-
-    const newTimetable = { ...timetable };
-    
-    if (userId && db && lastResetDate) {
-      const dailyProgressRef = collection(db, 'artifacts', appId, 'users', userId, 'dailyProgress');
-      await addDoc(dailyProgressRef, {
-        date: lastResetDate,
-        completed: completedCount,
-        total: completedCount + remainingCount,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    const resetTimetable = Object.keys(newTimetable).reduce((acc, day) => {
-      acc[day] = newTimetable[day].map(task => ({ ...task, isCompleted: false }));
-      return acc;
-    }, {});
-
-    if (db && userId) {
-      try {
-        const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'timetable');
-        await updateDoc(userDocRef, { schedule: resetTimetable });
-        setLastResetDate(today);
-        localStorage.setItem('lastResetDate', today);
-        setInfoMessage({ text: 'Daily tasks have been reset!', type: 'success' });
-      } catch (e) {
-        console.error("Error resetting daily tasks:", e);
-      }
-    }
-  };
-
+  // 2. Data Loading and Real-time Listeners
+  // This useEffect will run only after the user is authenticated (isAuthReady is true)
   useEffect(() => {
     if (db && userId) {
       const userTimetableRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'timetable');
       const userResourcesRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'resources');
       const userHomeworkRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'homework');
-      const dailyProgressRef = collection(db, 'artifacts', appId, 'users', userId, 'dailyProgress');
+      const dailyProgressColRef = collection(db, 'artifacts', appId, 'users', userId, 'dailyProgress');
       
+      // Listen for changes to the timetable
       const unsubscribeTimetable = onSnapshot(userTimetableRef, (docSnap) => {
         if (docSnap.exists()) {
           const fetchedTimetable = docSnap.data().schedule;
@@ -275,6 +258,7 @@ const App = () => {
           const todayTasks = fetchedTimetable[getTodayDayName()] || [];
           calculateProgress(todayTasks);
         } else {
+          // If no timetable exists, create a new one with initial data
           setDoc(userTimetableRef, { schedule: initialTimetable });
         }
         setLoading(false);
@@ -283,6 +267,7 @@ const App = () => {
         setInfoMessage({ text: "Error: Could not load timetable data.", type: 'error' });
       });
 
+      // Listen for changes to the resources
       const unsubscribeResources = onSnapshot(userResourcesRef, (docSnap) => {
         if (docSnap.exists()) {
           setResources(docSnap.data().list);
@@ -293,33 +278,38 @@ const App = () => {
         console.error("Error fetching resources:", error);
       });
       
+      // Listen for changes to the homework tasks
       const unsubscribeHomework = onSnapshot(userHomeworkRef, (docSnap) => {
         if (docSnap.exists()) {
           setHomeworkTasks(docSnap.data().list);
         } else {
+          // If no homework exists, create a new one with initial data
           setDoc(userHomeworkRef, { list: initialHomework });
         }
       }, (error) => {
         console.error("Error fetching homework:", error);
       });
       
-      const unsubscribeDailyProgress = onSnapshot(dailyProgressRef, (snapshot) => {
+      // Listen for changes to the daily progress history
+      const unsubscribeDailyProgress = onSnapshot(dailyProgressColRef, (snapshot) => {
         const progress = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setDailyProgressHistory(progress);
       }, (error) => {
         console.error("Error fetching daily progress history:", error);
       });
       
+      // Check for daily reset
       const storedLastResetDate = localStorage.getItem('lastResetDate');
       const today = new Date().toDateString();
 
       if (storedLastResetDate !== today) {
         setLastResetDate(storedLastResetDate);
-        resetDailyCompletionStatus();
+        resetDailyCompletionStatus(storedLastResetDate);
       } else {
         setLastResetDate(today);
       }
 
+      // Cleanup listeners on component unmount
       return () => {
         unsubscribeTimetable();
         unsubscribeResources();
@@ -327,7 +317,58 @@ const App = () => {
         unsubscribeDailyProgress();
       };
     }
-  }, [db, userId, lastResetDate]);
+  }, [db, userId, isAuthReady]);
+
+  // Handle daily reset
+  const resetDailyCompletionStatus = async (resetDate) => {
+    if (!db || !userId) {
+      console.log("Database not ready for reset.");
+      return;
+    }
+
+    const today = new Date().toDateString();
+    
+    // Check if the reset was already performed today
+    if (resetDate === today) {
+      return;
+    }
+
+    const newTimetable = { ...timetable };
+    
+    // Save previous day's progress
+    if (resetDate) {
+      const dailyProgressRef = collection(db, 'artifacts', appId, 'users', userId, 'dailyProgress');
+      await addDoc(dailyProgressRef, {
+        date: resetDate,
+        completed: completedCount,
+        total: completedCount + remainingCount,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Reset all tasks for all days to not completed
+    const resetTimetable = Object.keys(newTimetable).reduce((acc, day) => {
+      acc[day] = newTimetable[day].map(task => ({ ...task, isCompleted: false }));
+      return acc;
+    }, {});
+
+    try {
+      const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'timetable');
+      await updateDoc(userDocRef, { schedule: resetTimetable });
+      setLastResetDate(today);
+      localStorage.setItem('lastResetDate', today);
+      setInfoMessage({ text: 'Daily tasks have been reset!', type: 'success' });
+    } catch (e) {
+      console.error("Error resetting daily tasks:", e);
+    }
+  };
+
+  const calculateProgress = (tasks) => {
+    const completed = tasks.filter(task => task.isCompleted).length;
+    const remaining = tasks.length - completed;
+    setCompletedCount(completed);
+    setRemainingCount(remaining);
+  };
 
   useEffect(() => {
     const currentDayData = timetable[currentDay] || [];
@@ -724,7 +765,7 @@ const App = () => {
   };
   
   const renderContent = () => {
-    if (loading) {
+    if (loading || !isAuthReady) {
       return (
         <div className="flex items-center justify-center h-full">
           <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
@@ -796,7 +837,7 @@ const App = () => {
             <span className="hidden md:block">Homework</span>
           </button>
           <button
-            onClick={() => setCurrentView('history')} // 👈 This is the new button
+            onClick={() => setCurrentView('history')}
             className={`w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-colors ${currentView === 'history' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white'}`}
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -885,3 +926,4 @@ const App = () => {
 };
 
 export default App;
+
