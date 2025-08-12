@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, updateDoc, collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged, signOut, GoogleAuthProvider, signInWithPopup } from 'firebase/auth'; // 🚨 Updated: Added GoogleAuthProvider, signInWithPopup, and signOut
+import { getFirestore, doc, setDoc, onSnapshot, updateDoc, collection, addDoc, getDocs, query, where, getDoc } from 'firebase/firestore'; // 🚨 Updated: Added getDoc
 
 // Import the separated components
 import ConfirmationModal from './components/ConfirmationModal';
@@ -13,8 +13,12 @@ import RewardModal from './components/RewardModal';
 import TaskDetailsModal from './components/TaskDetailsModal';
 import ResourcesModal from './components/ResourcesModal';
 import ProgressTracker from './components/ProgressTracker';
-import HomeworkTimelinePage from "./components/HomeworkTimelinePage";
-import ProgressHistoryPage from "./components/ProgressHistoryPage";
+import HomeworkTimelinePage from './components/HomeworkTimelinePage';
+import ProgressHistoryPage from './components/ProgressHistoryPage';
+
+// 🚨 New: Import the new login page and a router.
+import LoginPage from './LoginPage';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 
 // The firebaseConfig and appId variables are automatically provided by the Canvas environment.
 // We use a fallback value for local development.
@@ -43,7 +47,7 @@ const initialTimetable = {
     { id: '5', start: '09:45', end: '11:35', title: 'GATE Technical subject', category: 'GATE', resources: [], isCompleted: false },
     { id: '6', start: '11:40', end: '12:30', title: 'College class', category: 'College', resources: [], isCompleted: false },
     { id: '7', start: '12:30', end: '13:30', title: 'DSA concepts', category: 'Placements', resources: [], isCompleted: false },
-    { id: '8', start: '13:30', end: '15:30', title: 'Aptitude & reasoning', category: 'Placements', resources: [], isCompleted: false },
+    { id: '8', start: '13:30', end: '15:30', title: 'Aptitude & reasoning', category: 'Placements', resources: false },
     { id: '9', start: '15:30', end: '18:30', title: 'GATE technical subject deep dive', category: 'GATE', resources: [], isCompleted: false },
     { id: '10', start: '18:30', end: '20:30', title: 'Mock questions + error analysis', category: 'GATE', resources: [], isCompleted: false },
     { id: '11', start: '20:30', end: '21:30', title: 'Job applications', category: 'Placements', resources: [], isCompleted: false },
@@ -166,7 +170,9 @@ const calculateDuration = (start, end) => {
   return diff / (1000 * 60 * 60);
 };
 
-const App = () => {
+const AppContent = () => { // 🚨 New: Extracted main App logic into a new component
+  const navigate = useNavigate();
+
   // States to manage application data
   const [timetable, setTimetable] = useState(initialTimetable);
   const [homeworkTasks, setHomeworkTasks] = useState(initialHomework);
@@ -218,16 +224,15 @@ const App = () => {
       const unsubscribe = onAuthStateChanged(appAuth, async (user) => {
         if (user) {
           setUserId(user.uid);
+          // 🚨 New: Redirect to dashboard if already logged in
+          if (window.location.pathname === '/' || window.location.pathname === '/login') {
+            navigate('/dashboard');
+          }
         } else {
-          try {
-            // Use custom token if available, otherwise sign in anonymously
-            if (initialAuthToken) {
-              await signInWithCustomToken(appAuth, initialAuthToken);
-            } else {
-              await signInAnonymously(appAuth);
-            }
-          } catch (e) {
-            console.error("Error signing in:", e);
+          setUserId(null);
+          // 🚨 New: Redirect to login page if not logged in
+          if (window.location.pathname !== '/' && window.location.pathname !== '/login') {
+            navigate('/login');
           }
         }
         setIsAuthReady(true);
@@ -239,7 +244,7 @@ const App = () => {
       setInfoMessage({ text: "Error: Failed to initialize Firebase. Data won't be saved.", type: 'error' });
       setLoading(false);
     }
-  }, []);
+  }, [navigate]);
 
   // 2. Data Loading and Real-time Listeners
   // This useEffect will run only after the user is authenticated (isAuthReady is true)
@@ -249,7 +254,7 @@ const App = () => {
       const userResourcesRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'resources');
       const userHomeworkRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'homework');
       const dailyProgressColRef = collection(db, 'artifacts', appId, 'users', userId, 'dailyProgress');
-      
+
       // Listen for changes to the timetable
       const unsubscribeTimetable = onSnapshot(userTimetableRef, (docSnap) => {
         if (docSnap.exists()) {
@@ -277,7 +282,7 @@ const App = () => {
       }, (error) => {
         console.error("Error fetching resources:", error);
       });
-      
+
       // Listen for changes to the homework tasks
       const unsubscribeHomework = onSnapshot(userHomeworkRef, (docSnap) => {
         if (docSnap.exists()) {
@@ -289,7 +294,7 @@ const App = () => {
       }, (error) => {
         console.error("Error fetching homework:", error);
       });
-      
+
       // Listen for changes to the daily progress history
       const unsubscribeDailyProgress = onSnapshot(dailyProgressColRef, (snapshot) => {
         const progress = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -297,7 +302,7 @@ const App = () => {
       }, (error) => {
         console.error("Error fetching daily progress history:", error);
       });
-      
+
       // Check for daily reset
       const storedLastResetDate = localStorage.getItem('lastResetDate');
       const today = new Date().toDateString();
@@ -327,14 +332,14 @@ const App = () => {
     }
 
     const today = new Date().toDateString();
-    
+
     // Check if the reset was already performed today
     if (resetDate === today) {
       return;
     }
 
     const newTimetable = { ...timetable };
-    
+
     // Save previous day's progress
     if (resetDate) {
       const dailyProgressRef = collection(db, 'artifacts', appId, 'users', userId, 'dailyProgress');
@@ -373,7 +378,7 @@ const App = () => {
   useEffect(() => {
     const currentDayData = timetable[currentDay] || [];
     const allTasksCompleted = currentDayData.length > 0 && currentDayData.every(task => task.isCompleted);
-    
+
     if (allTasksCompleted) {
       setIsRewardModalOpen(true);
     }
@@ -392,7 +397,7 @@ const App = () => {
           taskTime.setHours(hour, minute, 0);
 
           const timeDiff = taskTime.getTime() - now.getTime();
-          
+
           if (timeDiff > 0 && timeDiff <= 5 * 60 * 1000 && !notifiedTasks.has(task.id)) {
             setNotification({
               message: `Your task "${task.title}" is starting soon!`,
@@ -534,25 +539,33 @@ const App = () => {
 
   const handleAddHomework = async (newHw) => {
     if (db && userId) {
-        try {
-          const homeworkDocRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'homework');
-          const updatedHomework = [...homeworkTasks, { ...newHw, assignedDate: new Date().toISOString(), id: Date.now().toString() }];
-          await updateDoc(homeworkDocRef, { list: updatedHomework });
-        } catch(e) {
-            console.error("Error adding homework:", e);
-        }
+      try {
+        const homeworkDocRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'homework');
+        const updatedHomework = [...homeworkTasks, { ...newHw, assignedDate: new Date().toISOString(), id: Date.now().toString() }];
+        await updateDoc(homeworkDocRef, { list: updatedHomework });
+      } catch(e) {
+        console.error("Error adding homework:", e);
+      }
     }
   };
 
   const handleDeleteHomework = async (id) => {
     if (db && userId) {
-        try {
-          const homeworkDocRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'homework');
-          const updatedHomework = homeworkTasks.filter(hw => hw.id !== id);
-          await updateDoc(homeworkDocRef, { list: updatedHomework });
-        } catch(e) {
-            console.error("Error deleting homework:", e);
-        }
+      try {
+        const homeworkDocRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'homework');
+        const updatedHomework = homeworkTasks.filter(hw => hw.id !== id);
+        await updateDoc(homeworkDocRef, { list: updatedHomework });
+      } catch(e) {
+        console.error("Error deleting homework:", e);
+      }
+    }
+  };
+
+  // 🚨 New: Logout function
+  const handleLogout = async () => {
+    if (auth) {
+      await signOut(auth);
+      navigate('/login');
     }
   };
 
@@ -717,53 +730,53 @@ const App = () => {
 
     const allDays = [];
     for (let i = 0; i < firstDayOfWeek; i++) {
-        allDays.push(null);
+      allDays.push(null);
     }
 
     const weekDays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
     for (let i = 1; i <= daysInMonth; i++) {
-        const dayOfWeekIndex = (firstDayOfWeek + i - 1) % 7;
-        const dayOfWeekName = weekDays[dayOfWeekIndex];
-        allDays.push({ day: i, schedule: timetable[dayOfWeekName] });
+      const dayOfWeekIndex = (firstDayOfWeek + i - 1) % 7;
+      const dayOfWeekName = weekDays[dayOfWeekIndex];
+      allDays.push({ day: i, schedule: timetable[dayOfWeekName] });
     }
 
     return (
-        <div className="p-8">
-            <h2 className="text-3xl font-extrabold text-gray-900 dark:text-gray-100 mb-6 transition-colors duration-300">Monthly Tracker</h2>
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg transition-colors duration-300">
-                <div className="text-center text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">
-                    {today.toLocaleString('default', { month: 'long' })} {currentYear}
-                </div>
-                <div className="grid grid-cols-7 gap-2 text-center text-gray-500 dark:text-gray-400 font-bold mb-4">
-                    {weekDays.map(day => <div key={day} className="hidden md:block">{day.substring(0, 3)}</div>)}
-                </div>
-                <div className="grid grid-cols-7 gap-2">
-                    {allDays.map((day, index) => (
-                        <div key={index} className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-lg p-2 flex flex-col justify-between overflow-hidden relative transition-colors duration-300">
-                            {day ? (
-                                <>
-                                    <span className="text-gray-900 dark:text-gray-100 font-bold">{day.day}</span>
-                                    <div className="flex flex-wrap gap-1 mt-auto">
-                                        {day.schedule.map((task, taskIndex) => (
-                                            <span
-                                                key={taskIndex}
-                                                className="w-2 h-2 rounded-full"
-                                                style={{ backgroundColor: categoryColors[task.category] || '#6B7280' }}
-                                                title={task.title}
-                                            ></span>
-                                        ))}
-                                    </div>
-                                </>
-                            ) : null}
-                        </div>
-                    ))}
-                </div>
-            </div>
+      <div className="p-8">
+        <h2 className="text-3xl font-extrabold text-gray-900 dark:text-gray-100 mb-6 transition-colors duration-300">Monthly Tracker</h2>
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg transition-colors duration-300">
+          <div className="text-center text-xl font-bold text-gray-900 dark:text-gray-100 mb-4">
+            {today.toLocaleString('default', { month: 'long' })} {currentYear}
+          </div>
+          <div className="grid grid-cols-7 gap-2 text-center text-gray-500 dark:text-gray-400 font-bold mb-4">
+            {weekDays.map(day => <div key={day} className="hidden md:block">{day.substring(0, 3)}</div>)}
+          </div>
+          <div className="grid grid-cols-7 gap-2">
+            {allDays.map((day, index) => (
+              <div key={index} className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-lg p-2 flex flex-col justify-between overflow-hidden relative transition-colors duration-300">
+                {day ? (
+                  <>
+                    <span className="text-gray-900 dark:text-gray-100 font-bold">{day.day}</span>
+                    <div className="flex flex-wrap gap-1 mt-auto">
+                      {day.schedule.map((task, taskIndex) => (
+                        <span
+                          key={taskIndex}
+                          className="w-2 h-2 rounded-full"
+                          style={{ backgroundColor: categoryColors[task.category] || '#6B7280' }}
+                          title={task.title}
+                        ></span>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </div>
+      </div>
     );
   };
-  
+
   const renderContent = () => {
     if (loading || !isAuthReady) {
       return (
@@ -854,7 +867,37 @@ const App = () => {
             </svg>
             <span className="hidden md:block">Resources</span>
           </button>
-          <div className="flex-grow"></div>
+        </nav>
+
+        <div className="mt-auto space-y-2">
+          {/* 🚨 New: User profile and logout button */}
+          {auth && auth.currentUser && (
+            <div className="p-2 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex items-center space-x-2">
+                <img
+                  src={auth.currentUser.photoURL || `https://ui-avatars.com/api/?name=${auth.currentUser.displayName || auth.currentUser.email}&background=random`}
+                  alt="User avatar"
+                  className="w-8 h-8 rounded-full"
+                />
+                <div className="hidden md:block text-left">
+                  <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{auth.currentUser.displayName || 'User'}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{auth.currentUser.email}</p>
+                </div>
+              </div>
+            </div>
+          )}
+          {/* 🚨 New: Logout button */}
+          <button
+            onClick={handleLogout}
+            className="w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-colors text-red-500 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900 hover:text-red-700 dark:hover:text-red-200"
+            title="Logout"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            <span className="hidden md:block">Logout</span>
+          </button>
+
           <button
             onClick={() => setDarkMode(!darkMode)}
             className="w-full text-left p-3 rounded-lg flex items-center space-x-3 transition-colors text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white"
@@ -869,9 +912,6 @@ const App = () => {
             </svg>
             <span className="hidden md:block">{darkMode ? 'Light Mode' : 'Dark Mode'}</span>
           </button>
-        </nav>
-        <div className="mt-auto p-4 border-t border-gray-200 dark:border-gray-700 text-center text-xs text-gray-500 hidden md:block">
-            <p>User ID: {userId ? userId.substring(0, 8) + '...' : 'Loading...'}</p>
         </div>
       </div>
 
@@ -883,11 +923,11 @@ const App = () => {
         )}
         {renderContent()}
       </main>
-      
+
       {notification && (
         <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-blue-600 text-white p-4 rounded-lg shadow-xl z-50 animate-fade-in-up">
-            <p>{notification.message}</p>
-            <button onClick={() => setNotification(null)} className="absolute top-1 right-2 text-white/50 hover:text-white">&times;</button>
+          <p>{notification.message}</p>
+          <button onClick={() => setNotification(null)} className="absolute top-1 right-2 text-white/50 hover:text-white">&times;</button>
         </div>
       )}
 
@@ -925,5 +965,93 @@ const App = () => {
   );
 };
 
-export default App;
+// 🚨 New: The main App component now handles routing and authentication checks
+const App = () => {
+  const [auth, setAuth] = useState(null);
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [db, setDb] = useState(null);
 
+  useEffect(() => {
+    try {
+      const app = initializeApp(firebaseConfig);
+      const firestore = getFirestore(app);
+      const appAuth = getAuth(app);
+      setDb(firestore);
+      setAuth(appAuth);
+
+      // 🚨 New: Set persistence to 'session'
+      appAuth.setPersistence('session');
+
+      const unsubscribe = onAuthStateChanged(appAuth, (currentUser) => {
+        setUser(currentUser);
+        setLoading(false);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.error("Firebase initialization failed:", e);
+      setLoading(false);
+    }
+  }, []);
+
+  const handleGoogleSignIn = async () => {
+    const provider = new GoogleAuthProvider();
+    if (!auth || !db) {
+      console.error("Firebase not initialized.");
+      return;
+    }
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const googleUser = result.user;
+      const userDocRef = doc(db, 'artifacts', appId, 'users', googleUser.uid, 'profile', 'data');
+      const userDocSnap = await getDoc(userDocRef);
+
+      const userData = {
+        uid: googleUser.uid,
+        displayName: googleUser.displayName,
+        email: googleUser.email,
+        profilePhoto: googleUser.photoURL,
+        lastLogin: new Date().toISOString(),
+      };
+
+      if (userDocSnap.exists()) {
+        // User exists, update their lastLogin timestamp
+        await updateDoc(userDocRef, {
+          lastLogin: userData.lastLogin,
+        });
+      } else {
+        // New user, create a new document
+        await setDoc(userDocRef, {
+          ...userData,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      console.error("Error during Google sign-in:", error.code, error.message);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
+        <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+        <p className="ml-4 text-xl">Loading...</p>
+      </div>
+    );
+  }
+
+  return (
+    <Router>
+      <Routes>
+        <Route path="/login" element={<LoginPage onSignIn={handleGoogleSignIn} />} />
+        <Route
+          path="/dashboard/*"
+          element={user ? <AppContent /> : <Navigate to="/login" />}
+        />
+        <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />} />
+      </Routes>
+    </Router>
+  );
+};
+
+export default App;
