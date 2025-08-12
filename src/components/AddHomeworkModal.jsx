@@ -5,21 +5,25 @@ import './AddHomeworkModal.css'; // Add a CSS file for styling
 const AddHomeworkModal = ({ isOpen, onClose, onAdd }) => {
   const [homeworkTitle, setHomeworkTitle] = useState('');
   const [dueDate, setDueDate] = useState('');
-  const [subject, setSubject] = useState(''); // Added subject field
+  const [dueTime, setDueTime] = useState(''); // New state for time
+  const [subject, setSubject] = useState('');
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (homeworkTitle && dueDate) {
+    if (homeworkTitle && dueDate && dueTime) { // Check if time is also filled
+      // Combine date and time to create a single ISO string
+      const deadline = `${dueDate}T${dueTime}:00`; 
       onAdd({
         title: homeworkTitle,
-        deadline: dueDate,
-        subject: subject || 'General', // Default to 'General' if not provided
+        deadline: deadline, // Pass the combined deadline
+        subject: subject || 'General',
       });
       // Reset form fields
       setHomeworkTitle('');
       setDueDate('');
+      setDueTime(''); // Reset time state
       setSubject('');
-      onClose(); // Close the modal
+      onClose();
     }
   };
 
@@ -88,21 +92,40 @@ const AddHomeworkModal = ({ isOpen, onClose, onAdd }) => {
             />
           </div>
 
-          <div>
-            <label
-              htmlFor="due-date"
-              className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-            >
-              Due Date
-            </label>
-            <input
-              id="due-date"
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="mt-1 block w-full p-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-200 border border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
-              required
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label
+                htmlFor="due-date"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                Due Date
+              </label>
+              <input
+                id="due-date"
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="mt-1 block w-full p-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-200 border border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
+                required
+              />
+            </div>
+            {/* New time input field */}
+            <div>
+              <label
+                htmlFor="due-time"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+              >
+                Due Time
+              </label>
+              <input
+                id="due-time"
+                type="time"
+                value={dueTime}
+                onChange={(e) => setDueTime(e.target.value)}
+                className="mt-1 block w-full p-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-200 border border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
+                required
+              />
+            </div>
           </div>
 
           <button
